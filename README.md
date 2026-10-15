@@ -31,9 +31,8 @@ hyperlinks), every stretch is drawn open, as cc-stretch does on Claude Code's cl
 
 [The Nook](https://nook.freno.me) puts every coding agent you run (pi, Claude Code, Codex and
 more, local or over SSH) in your Mac's notch, on your iPhone and on your Apple Watch, and it
-reads stretchtext from both pi-stretch and cc-stretch exactly as the terminal does. Stretches open and close on a tap in the Mac's session detail and the iPhone's
-message view, compact cards and previews show only the short forms, and the watch shows each
-reply with every stretch open.
+reads stretchtext from both pi-stretch and cc-stretch exactly as the terminal does. Stretches
+open and close on a tap in the Mac's session detail and the iPhone's message view.
 
 `parse.ts`, `grow.ts` and `guide.ts` are cc-stretch's, vendored unchanged; `inline.ts` writes
 stretches into pi's markdown. `npm test` drives the extension against pi-tui's own Markdown;
