@@ -1,0 +1,37 @@
+name: publish
+
+# Publish this package to the npm registry on version tags.
+#
+# Prerequisites on npmjs.com / git.freno.me:
+#   - an npm automation token (publish scope) available to this repo as the
+#     secret NPM_TOKEN (consumed via actions/setup-node registry auth)
+#   - the scoped package name claimed on npm (@mikefreno/pi-stretch)
+#
+# The package ships TypeScript sources — nothing is built — so lifecycle
+# scripts are skipped: typecheck and test run against the global pi SDK that
+# CI does not install.
+#
+# Manual publish: Actions tab → Run workflow (workflow_dispatch).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node (npm registry auth)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish pi package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --ignore-scripts

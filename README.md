@@ -3,6 +3,10 @@
 [cc-stretch](https://github.com/pro-vi/cc-stretch) — the Claude Code stretchtext plugin — as a
 pi extension. Replies arrive short; click a linked phrase and it grows right where it stands.
 
+```bash
+pi install npm:@mikefreno/pi-stretch
+```
+
 - **Guide**: `before_agent_start` adds cc-stretch's stretchtext guide to the system prompt as a
   `stretchtext` section, so the model writes replies as `{{short|long}}` stretchtext.
 - **Inline**: a markdown transformer draws each closed stretch as a link on its short form and
@@ -22,6 +26,14 @@ hyperlinks. pi answers a click on a hyperlink by handing its URL to the TUI's `o
 extension wraps that, so its own `https://pi-stretch.invalid/…` links open and close stretches
 and every other link still opens in the browser. Where a click cannot land (regular mode, or no
 hyperlinks), every stretch is drawn open, as cc-stretch does on Claude Code's classic renderer.
+
+## Off the terminal: The Nook
+
+[The Nook](https://nook.freno.me) puts every coding agent you run (pi, Claude Code, Codex and
+more, local or over SSH) in your Mac's notch, on your iPhone and on your Apple Watch, and it
+reads stretchtext from both pi-stretch and cc-stretch exactly as the terminal does. Stretches open and close on a tap in the Mac's session detail and the iPhone's
+message view, compact cards and previews show only the short forms, and the watch shows each
+reply with every stretch open.
 
 `parse.ts`, `grow.ts` and `guide.ts` are cc-stretch's, vendored unchanged; `inline.ts` writes
 stretches into pi's markdown. `npm test` drives the extension against pi-tui's own Markdown;
