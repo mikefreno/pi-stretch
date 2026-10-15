@@ -5,16 +5,21 @@ pi extension. Replies arrive short; click a linked phrase and it grows right whe
 
 - **Guide**: `before_agent_start` adds cc-stretch's stretchtext guide to the system prompt as a
   `stretchtext` section, so the model writes replies as `{{short|long}}` stretchtext.
-- **Skim**: a markdown transformer hides every stretch's long form, in the transcript and while
-  a reply streams.
-- **Reader**: `/stretch` opens the last reply as an overlay. A click on a phrase opens its long
-  form around it (the words already read never move), `«` shrinks it back; `j`/`k` + `enter`
-  work where there is no mouse. Stretches nest.
-- **Feedback**: what the reader opened is kept in the session (a `pi-stretch:read` entry) and,
-  with their next message, told to the model as a hidden note — it is never left assuming they
-  read a long form they did not open.
+- **Inline**: a markdown transformer draws each closed stretch as a link on its short form and
+  each open one with a `«` after it. A click grows the long form in place in the transcript (the
+  words already read never move), `«` shrinks it back. Stretches nest, and any reply in the
+  transcript can be read this way, not only the last.
+- **Streaming**: while a reply streams, its stretches show as their short forms.
+- **Feedback**: with the reader's next message, the model is told which stretches they opened
+  since its last reply, as a hidden note, so it never assumes they read a long form they did not
+  open.
 
-`parse.ts`, `grow.ts`, `layout.ts` and `guide.ts` are cc-stretch's, vendored unchanged. The
-one difference from the plugin: pi draws assistant markdown itself, so stretches cannot grow
-inline in the transcript — the interactive reading lives in the `/stretch` overlay instead.
-Tracked as MISC-40 on Plane.
+Clicks need pi's fullscreen mode (the default `tuiMode`) and a terminal that draws OSC 8
+hyperlinks. pi answers a click on a hyperlink by handing its URL to the TUI's `openUrl`; the
+extension wraps that, so its own `https://pi-stretch.invalid/…` links open and close stretches
+and every other link still opens in the browser. Where a click cannot land (regular mode, or no
+hyperlinks), every stretch is drawn open, as cc-stretch does on Claude Code's classic renderer.
+
+`parse.ts`, `grow.ts` and `guide.ts` are cc-stretch's, vendored unchanged; `inline.ts` writes
+stretches into pi's markdown. `npm test` drives the extension against pi-tui's own Markdown;
+`npm run typecheck` checks it against the installed pi.

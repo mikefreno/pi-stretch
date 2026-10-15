@@ -1,0 +1,9 @@
+{
+  "name": "pi-stretch",
+  "private": true,
+  "description": "Checks for the extension; pi loads index.ts itself and needs none of this.",
+  "scripts": {
+    "test": "JITI_ALIAS='{\"@earendil-works/pi-tui\":\"/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js\"}' node /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-cli.mjs index.test.ts",
+    "typecheck": "tsc -p ."
+  }
+}

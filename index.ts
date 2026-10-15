@@ -1,111 +1,210 @@
 // cc-stretch for pi: replies that arrive short and grow where they stand. The
-// model writes stretchtext ({{short|long}}) under the guide below, pi's
-// transcript draws every stretch closed, and the reader spends their attention
-// one phrase at a time in the /stretch reader. What they opened is kept and
-// told to the model with their next message, so it never assumes they read the
-// rest. Ported from the Claude Code plugin: github.com/pro-vi/cc-stretch
-// (parse.ts, grow.ts, layout.ts and guide.ts here are its, unchanged).
+// model writes stretchtext ({{short|long}}) under the guide below, and pi's
+// transcript draws every stretch closed, as a link on its short form. A click
+// on one grows its long form in place, and `«` shrinks it back. What the
+// reader opened is told to the model with their next message, so it never
+// assumes they read the rest. Ported from the Claude Code plugin:
+// github.com/pro-vi/cc-stretch (parse.ts, grow.ts and guide.ts here are its,
+// unchanged).
+//
+// A press reaches the extension the way a press on any link reaches pi: in
+// fullscreen mode pi finds the terminal hyperlink under the pointer and hands
+// its URL to the TUI's `openUrl`. That is wrapped here; URLs of ours open or
+// close a stretch, and every other URL still goes to the browser.
 
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { getCapabilities, Markdown, ScrollView } from '@earendil-works/pi-tui'
+import type { Component, TUI } from '@earendil-works/pi-tui'
 
+import { lengthOf } from './grow'
 import { GUIDE } from './guide'
+import { blockOf, closed, drawOpen, drawPressable, targetOf } from './inline'
+import type { Growth } from './inline'
 import { hideLongForms, isOpenable, parse, stretches } from './parse'
-import { StretchReader } from './reader'
 
-/** What the reader opened in one reply, kept under that reply's first entry id. */
-type Read = { replyId: string; opened: string[] }
-
-const READ_ENTRY = 'pi-stretch:read'
 const NOTE_TYPE = 'pi-stretch:read-note'
+const FRAME_MS = 16
+
+/** The fields of pi's components this extension reaches past their types for. */
+type Host = { openUrl?: (url: string) => void; getMountedRoots?: () => Component[] }
+type Node = Component & { children?: Component[] }
 
 export default function stretch(pi: ExtensionAPI) {
-  // The reader's last reading, kept in memory and in the session file so it survives a
-  // reload or a resumed session. Only the newest one matters.
-  let lastRead: Read | undefined
+  // The TUI, once a widget hands it over, and the `openUrl` pi gave it, for every URL not ours.
+  let tui: TUI | undefined
+  let follow: ((url: string) => void) | undefined
+  // Each text block's markdown and its open stretches, by block name.
+  const texts = new Map<string, string>()
+  const open = new Map<string, string[]>()
+  let growth: Growth | undefined
+  let timer: ReturnType<typeof setInterval> | undefined
+  // The short forms the reader opened since their last message.
+  let seen: string[] = []
+
+  /** Whether a press on a stretch reaches us: pi's fullscreen mode, drawing hyperlinks, with `openUrl` wrapped. */
+  const hook = (): boolean => {
+    if (tui === undefined || tui.mode !== 'fullscreen' || !getCapabilities().hyperlinks) return false
+    // pi can swap the renderer for a new one; its `openUrl` is wrapped again the first time it draws.
+    const host = tui as unknown as Host
+    if (host.openUrl !== press) {
+      follow = host.openUrl
+      host.openUrl = press
+    }
+    return true
+  }
+
+  const press = (url: string): void => {
+    const target = targetOf(url)
+    if (target === undefined) follow?.(url)
+    else toggle(target.block, target.key)
+  }
+
+  const toggle = (block: string, key: string): void => {
+    const stretch = stretches(parse(texts.get(block) ?? '')).find(one => one.key === key)
+    if (stretch?.long === undefined) return
+    // A stretch still shrinking when another press lands is closed at once; one still opening
+    // jumps to open, since its key is already in the list.
+    const was = growth
+    if (was !== undefined && !was.isOpening) open.set(was.block, closed(open.get(was.block) ?? [], was.key))
+
+    const list = open.get(block) ?? []
+    const duration = 1000 * Math.min(1.4, 0.45 + lengthOf(stretch.long) / 70)
+    if (list.includes(key)) {
+      growth = { block, key, isOpening: false, progress: 1, duration }
+    } else {
+      open.set(block, [...list, key])
+      growth = { block, key, isOpening: true, progress: 0, duration }
+      const short = stretch.short.trim()
+      if (!seen.includes(short)) seen.push(short)
+    }
+
+    // The words already read stay where they are: a transcript following its end would push
+    // them up as the stretch grows beneath.
+    for (const { scroll } of drawnOf(block)) scroll?.scrollTo(scroll.scrollTop, { disableFollow: true })
+    if (was !== undefined && was.block !== block) redraw(was.block)
+    redraw(block)
+    timer ??= setInterval(tick, FRAME_MS)
+  }
+
+  const tick = (): void => {
+    if (growth === undefined) return stop()
+    const progress = growth.progress + ((growth.isOpening ? 1 : -1) * FRAME_MS) / growth.duration
+    if (progress > 0 && progress < 1) {
+      growth = { ...growth, progress }
+      return redraw(growth.block)
+    }
+    // A shrunk stretch, and every stretch inside it, leaves the open list as its growth ends.
+    const done = growth
+    if (!done.isOpening) open.set(done.block, closed(open.get(done.block) ?? [], done.key))
+    growth = undefined
+    stop()
+    redraw(done.block)
+  }
+
+  const stop = (): void => {
+    if (timer !== undefined) clearInterval(timer)
+    timer = undefined
+  }
+
+  /** The transcript's Markdown components drawing `block`, each with the ScrollView it sits in. */
+  const drawnOf = (block: string) => markdownsWhere(markdown => blockOf(markdown) === block)
+
+  const markdownsWhere = (test: (markdown: string) => boolean): { markdown: Markdown; scroll: ScrollView | undefined }[] => {
+    if (tui === undefined) return []
+    const found: { markdown: Markdown; scroll: ScrollView | undefined }[] = []
+    const visit = (node: Node, scroll: ScrollView | undefined) => {
+      if (node instanceof Markdown) {
+        if (test((node as unknown as { text: string }).text)) found.push({ markdown: node, scroll })
+        return
+      }
+      const within = node instanceof ScrollView ? node : scroll
+      for (const child of node.children ?? []) visit(child, within)
+    }
+    const host = tui as unknown as Host
+    for (const root of host.getMountedRoots?.() ?? tui.children) visit(root, undefined)
+    return found
+  }
+
+  // pi's Markdown keeps its lines until its text changes; a stretch growing changes only what
+  // the transformer makes of the text, so its blocks are told to draw again.
+  const redraw = (block: string): void => {
+    for (const { markdown } of drawnOf(block)) markdown.invalidate()
+    tui?.requestRender()
+  }
 
   pi.on('session_start', (_event, ctx) => {
-    for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
-      if (entry.type !== 'custom' || entry.customType !== READ_ENTRY) continue
-      const data = entry.data as Partial<Read> | undefined
-      if (typeof data?.replyId === 'string' && Array.isArray(data.opened)) {
-        lastRead = { replyId: data.replyId, opened: data.opened.filter((key): key is string => typeof key === 'string') }
-      }
-      break
-    }
+    seen = []
+    if (ctx.mode !== 'tui') return
+    // Extensions are not handed the TUI; a widget's factory is. This one draws nothing.
+    ctx.ui.setWidget(
+      'pi-stretch',
+      host => {
+        tui = host
+        // Replies drawn before the TUI was known were drawn open; they draw again, pressable.
+        for (const { markdown } of markdownsWhere(markdown => markdown.includes('{{'))) markdown.invalidate()
+        host.requestRender()
+        return { render: () => [], invalidate: () => {} }
+      },
+      { placement: 'belowEditor' },
+    )
   })
 
-  // The stretchtext guide rides with the system prompt. cc-stretch's benchmark rewrites
-  // replies under this same text, so it stays word for word what guide.ts has.
+  pi.on('session_shutdown', () => {
+    stop()
+    const host = tui as unknown as Host | undefined
+    if (host !== undefined && host.openUrl === press) host.openUrl = follow
+    tui = undefined
+  })
+
+  // The stretchtext guide rides with the system prompt. cc-stretch's benchmark rewrites replies under
+  // this same text, so it stays word for word what guide.ts has.
   pi.on('before_agent_start', (event, ctx) => {
     event.systemPromptOptions.sections['stretchtext'] = GUIDE
 
     if (event.messageType !== 'user') return
-    const reply = lastReplyOf(ctx)
-    if (reply === undefined) return
-    const openable = stretches(parse(reply.text)).filter(isOpenable)
-    if (openable.length === 0) return
+    const opened = seen
+    seen = []
+    const written = stretches(parse(lastReplyOf(ctx))).filter(isOpenable).map(stretch => stretch.short.trim())
+    const unopened = written.filter(short => !opened.includes(short))
+    if (opened.length === 0 && unopened.length === 0) return
 
-    // What the reader opened of this reply, in its terms: keys, matched back to short forms.
-    const read = lastRead !== undefined && lastRead.replyId === reply.id ? lastRead : undefined
-    const opened = read === undefined ? [] : openable.filter(stretch => read.opened.includes(stretch.key))
-    const unopened = openable.filter(stretch => !opened.includes(stretch))
     const quote = (list: string[]) => list.map(short => `"${short}"`).join(', ')
     const note =
       opened.length > 0
-        ? `Stretchtext: since your last reply the reader opened ${quote(opened.map(stretch => stretch.short.trim()))}.` +
-          (unopened.length > 0 ? ` They did not open ${quote(unopened.map(stretch => stretch.short.trim()))}.` : '')
-        : // The transcript drew the reply with every stretch closed, so nothing was read but the skim.
-          'Stretchtext: the reader opened no stretch of your last reply. The transcript showed only its short forms; do not assume they read any long form.'
+        ? `Stretchtext: since your last reply the reader opened ${quote(opened)}.` +
+          (unopened.length > 0 ? ` They did not open ${quote(unopened)}.` : '')
+        : hook()
+          ? 'Stretchtext: the reader opened no stretch of your last reply. They read only its short forms; do not assume they read any long form.'
+          : 'Stretchtext: this screen cannot take a click on a stretch, so every stretch of your last reply was drawn open.'
 
-    return {
-      message: { customType: NOTE_TYPE, content: note, display: false },
-    }
+    return { message: { customType: NOTE_TYPE, content: note, display: false } }
   })
 
-  // While a reply streams and once it stands, pi's markdown runs through here; hiding each
-  // stretch's long form keeps the raw markup off the screen and leaves the skim. The
-  // transformer sees the full text on every flush, so one pass with a fresh state is enough.
+  // Every assistant text block pi draws runs through here. While a reply streams its stretches
+  // show as short forms, raw markup kept off the screen; once it stands they become pressable,
+  // or, where a press cannot land, they are all drawn open.
   pi.registerMarkdownTransformer((markdown, context) => {
     if (context.messageType !== 'assistant') return markdown
-    return hideLongForms(markdown, { open: [], fence: undefined })
-  })
+    if (context.isStreaming) return hideLongForms(markdown, { open: [], fence: undefined })
+    if (!markdown.includes('{{')) return markdown
+    if (!hook()) return drawOpen(markdown)
 
-  pi.registerCommand('stretch', {
-    description: 'Read the last reply stretch by stretch',
-    handler: async (_args, ctx) => {
-      if (!ctx.hasUI) return
-      const reply = lastReplyOf(ctx)
-      if (reply === undefined || stretches(parse(reply.text)).filter(isOpenable).length === 0) {
-        ctx.ui.notify('No reply with stretches to read.', 'info')
-        return
-      }
-
-      const open = lastRead !== undefined && lastRead.replyId === reply.id ? lastRead.opened : []
-      const opened = await ctx.ui.custom<string[]>(
-        (tui, theme, _keybindings, done) => new StretchReader(tui, theme, done, reply.text, open),
-        { overlay: true, overlayOptions: { anchor: 'center', width: '96%', maxHeight: '92%' } },
-      )
-
-      lastRead = { replyId: reply.id, opened: opened ?? [] }
-      pi.appendEntry(READ_ENTRY, lastRead)
-    },
+    const block = blockOf(markdown)
+    texts.set(block, markdown)
+    return drawPressable(markdown, block, open.get(block) ?? [], growth?.block === block ? growth : undefined)
   })
 }
 
-/** The model's last reply: the assistant texts after the person's last prompt, and the id of the entry that starts them. */
-function lastReplyOf(ctx: ExtensionContext): { id: string; text: string } | undefined {
-  const texts: { id: string; text: string }[] = []
+/** The text of the model's last reply: its assistant texts after the person's last prompt. */
+function lastReplyOf(ctx: ExtensionContext): string {
+  const texts: string[] = []
   for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
     if (entry.type !== 'message') continue
     const message = entry.message
     if (message.role === 'user') break
     if (message.role !== 'assistant') continue
-    const text = message.content
-      .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-      .map(part => part.text)
-      .join('\n')
-    if (text.trim() !== '') texts.unshift({ id: entry.id, text })
+    texts.unshift(message.content.flatMap(part => (part.type === 'text' ? [part.text] : [])).join('\n'))
   }
 
-  return texts.length > 0 ? { id: texts[0]?.id ?? '', text: texts.map(one => one.text).join('\n') } : undefined
+  return texts.join('\n')
 }
