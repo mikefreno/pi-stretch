@@ -4,7 +4,9 @@
 // on one grows its long form in place, the transcript scrolling with the
 // growth, and `«` shrinks it back. What the
 // reader opened is told to the model with their next message, so it never
-// assumes they read the rest. Ported from the Claude Code plugin:
+// assumes they read the rest — told in the request alone, never written to
+// the session, so no history row, export or summary ever carries it. Ported
+// from the Claude Code plugin:
 // github.com/pro-vi/cc-stretch (parse.ts, grow.ts and guide.ts here are its,
 // unchanged).
 //
@@ -23,7 +25,6 @@ import { blockOf, closed, drawOpen, drawPressable, targetOf } from './inline'
 import type { Growth } from './inline'
 import { hideLongForms, isOpenable, parse, stretches } from './parse'
 
-const NOTE_TYPE = 'pi-stretch:read-note'
 const FRAME_MS = 16
 
 /** The fields of pi's components this extension reaches past their types for. */
@@ -49,6 +50,8 @@ export default function stretch(pi: ExtensionAPI) {
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   // The short forms the reader opened since their last message.
   let seen: string[] = []
+  // The note owed the model with the run in flight. It rides the run's requests and is never persisted.
+  let note: { text: string; at: number } | undefined
 
   /** Whether a press on a stretch reaches us: pi's fullscreen mode, drawing hyperlinks, with `openUrl` wrapped. */
   const hook = (): boolean => {
@@ -184,6 +187,7 @@ export default function stretch(pi: ExtensionAPI) {
 
   pi.on('session_start', (_event, ctx) => {
     seen = []
+    note = undefined
     if (ctx.mode !== 'tui') return
     // Extensions are not handed the TUI; a widget's factory is. This one draws nothing.
     ctx.ui.setWidget(
@@ -212,7 +216,9 @@ export default function stretch(pi: ExtensionAPI) {
   })
 
   // The stretchtext guide rides with the system prompt. cc-stretch's benchmark rewrites replies under
-  // this same text, so it stays word for word what guide.ts has.
+  // this same text, so it stays word for word what guide.ts has. What the reader opened is worked
+  // out here too, at the run's start, but only into `note` — returning it as a message would make
+  // pi persist a session entry the history tree, exports and summaries would all carry forever.
   pi.on('before_agent_start', (event, ctx) => {
     event.systemPromptOptions.sections['stretchtext'] = GUIDE
 
@@ -221,18 +227,30 @@ export default function stretch(pi: ExtensionAPI) {
     seen = []
     const written = stretches(parse(lastReplyOf(ctx))).filter(isOpenable).map(stretch => stretch.short.trim())
     const unopened = written.filter(short => !opened.includes(short))
+    note = undefined
     if (opened.length === 0 && unopened.length === 0) return
 
     const quote = (list: string[]) => list.map(short => `"${short}"`).join(', ')
-    const note =
-      opened.length > 0
-        ? `Stretchtext: since your last reply the reader opened ${quote(opened)}.` +
-          (unopened.length > 0 ? ` They did not open ${quote(unopened)}.` : '')
-        : hook()
-          ? 'Stretchtext: the reader opened no stretch of your last reply. They read only its short forms; do not assume they read any long form.'
-          : 'Stretchtext: this screen cannot take a click on a stretch, so every stretch of your last reply was drawn open.'
+    note = {
+      at: Date.now(),
+      text:
+        opened.length > 0
+          ? `Stretchtext: since your last reply the reader opened ${quote(opened)}.` +
+            (unopened.length > 0 ? ` They did not open ${quote(unopened)}.` : '')
+          : hook()
+            ? 'Stretchtext: the reader opened no stretch of your last reply. They read only its short forms; do not assume they read any long form.'
+            : 'Stretchtext: this screen cannot take a click on a stretch, so every stretch of your last reply was drawn open.',
+    }
+  })
 
-    return { message: { customType: NOTE_TYPE, content: note, display: false } }
+  // The note rides every request of the run, spliced right after the person's prompt so its place
+  // never moves as tool results arrive and the prompt cache stays warm. Pi restores the transcript
+  // once the request is sent, so the model reads the note and nothing else ever does.
+  pi.on('context', event => {
+    if (note === undefined) return
+    const after = event.messages.map(message => message.role).lastIndexOf('user')
+    if (after === -1) return
+    event.messages.splice(after + 1, 0, { role: 'user', content: note.text, timestamp: note.at })
   })
 
   // Every assistant text block pi draws runs through here. While a reply streams its stretches

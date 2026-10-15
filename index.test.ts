@@ -58,8 +58,25 @@ function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?:
   handlers.get('session_start')?.({}, ctx)
 
   const screen = () => markdown.render(width)
-  const note = () => handlers.get('before_agent_start')?.({ messageType: 'user', systemPromptOptions: { sections: {} } }, ctx)?.message?.content
-  return { tui, transcript, browsed, screen, note, shutdown: () => handlers.get('session_shutdown')?.({}, ctx) }
+  /** The run pi starts on the reader's message. Whatever it returns is persisted to the session. */
+  const turn = () => handlers.get('before_agent_start')?.({ messageType: 'user', systemPromptOptions: { sections: {} } }, ctx)
+  /** One request of that run: the reader's message, the reply so far, and whatever has come after it. */
+  const request = (...since: any[]): any[] => {
+    const messages = [
+      { role: 'user', content: 'why?', timestamp: 0 },
+      { role: 'assistant', content: [{ type: 'text', text: REPLY }], timestamp: 0 },
+      ...since,
+    ]
+    handlers.get('context')?.({ type: 'context', messages }, ctx)
+    return messages
+  }
+  /** What the model is told alongside the reader's message, across a turn's first request. */
+  const note = (): string | undefined => {
+    turn()
+    const sent = request()
+    return sent[1]?.role === 'user' ? sent[1].content : undefined
+  }
+  return { tui, transcript, browsed, screen, turn, request, note, shutdown: () => handlers.get('session_shutdown')?.({}, ctx) }
 }
 
 /** The URL of the link drawn over `words`, as pi's TUI finds it under a click there. */
@@ -169,12 +186,42 @@ test('the next message tells the model what was opened', async () => {
   setCapabilities({ images: null, trueColor: true, hyperlinks: true })
   const pi = load('fullscreen')
   try {
-    assert.match(pi.note(), /opened no stretch/)
+    assert.match(pi.note() ?? '', /opened no stretch/)
     pi.tui.openUrl(linkOver(pi.screen(), 'stale cache'))
     assert.equal(pi.note(), 'Stretchtext: since your last reply the reader opened "on a stale cache".')
     // Told once: the message after that reports a fresh start.
-    assert.match(pi.note(), /opened no stretch/)
+    assert.match(pi.note() ?? '', /opened no stretch/)
     await settle()
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('the note reaches the model and never the session', () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen')
+  try {
+    // Nothing comes back to persist: no session entry, so no row for the history tree to draw.
+    assert.equal(pi.turn(), undefined)
+    const sent = pi.request()
+    assert.deepEqual(sent.map(message => message.role), ['user', 'user', 'assistant'])
+    assert.match(sent[1].content, /opened no stretch/)
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('the note keeps its place on every request of the run', () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen')
+  try {
+    pi.turn()
+    const first = pi.request()
+    const second = pi.request({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }], timestamp: 0 })
+    // Right after the reader's message in both, so the run's prompt cache never moves.
+    assert.deepEqual(second.map(message => message.role), ['user', 'user', 'assistant', 'toolResult'])
+    assert.equal(second[1].content, first[1].content)
+    assert.equal(second[1].timestamp, first[1].timestamp)
   } finally {
     pi.shutdown()
   }
@@ -186,7 +233,7 @@ test('where a click cannot land, every stretch is drawn open', () => {
     const pi = load(mode)
     try {
       assert.equal(text(pi.screen()), 'The build fails on a stale dependency cache keyed only by package.json. Rerun it.')
-      assert.match(pi.note(), /drawn open/)
+      assert.match(pi.note() ?? '', /drawn open/)
     } finally {
       pi.shutdown()
     }

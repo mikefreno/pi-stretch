@@ -12,8 +12,10 @@ pi extension. Replies arrive short; click a linked phrase and it grows right whe
   can be read this way, not only the last.
 - **Streaming**: while a reply streams, its stretches show as their short forms.
 - **Feedback**: with the reader's next message, the model is told which stretches they opened
-  since its last reply, as a hidden note, so it never assumes they read a long form they did not
-  open.
+  since its last reply, so it never assumes they read a long form they did not open. The note is
+  spliced into that request alone, right after the reader's message, and pi restores the transcript
+  once the request is sent: nothing is written to the session, so the history tree, exports and
+  compaction summaries never see it.
 
 Clicks need pi's fullscreen mode (the default `tuiMode`) and a terminal that draws OSC 8
 hyperlinks. pi answers a click on a hyperlink by handing its URL to the TUI's `openUrl`; the
