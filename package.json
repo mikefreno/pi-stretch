@@ -1,6 +1,6 @@
 {
   "name": "@mikefreno/pi-stretch",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Stretchtext for pi — replies arrive short; click a phrase and it grows in place. A port of cc-stretch.",
   "keywords": [
     "pi-package",
