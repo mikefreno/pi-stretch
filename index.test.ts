@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { Container, getOsc8LinkAtColumn, Markdown, ScrollView, setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { Container, getOsc8LinkAtColumn, Markdown, ScrollView, Text, setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import type { MarkdownTheme } from '@earendil-works/pi-tui'
 
 import stretch from './index'
@@ -21,7 +21,8 @@ const THEME: MarkdownTheme = {
 type Handler = (event: any, ctx: any) => any
 
 /** The extension loaded into a stand-in for pi: one reply in a transcript, on a TUI in `mode`. */
-function load(mode: 'fullscreen' | 'regular') {
+function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?: number; above?: number } = {}) {
+  const { width = 200, viewport = 1000, above = 0 } = view
   const handlers = new Map<string, Handler>()
   let transform: (markdown: string, context: any) => string = markdown => markdown
   stretch({
@@ -34,6 +35,7 @@ function load(mode: 'fullscreen' | 'regular') {
     transform: (text: string, availableWidth: number) => transform(text, { messageType: 'assistant', isStreaming: false, availableWidth }),
   })
   const document = new Container()
+  if (above > 0) document.addChild(new Text(Array.from({ length: above }, () => '…').join('\n'), 0, 0))
   document.addChild(markdown)
   const transcript = new ScrollView(document, { follow: 'end' })
   const root = new Container()
@@ -43,7 +45,8 @@ function load(mode: 'fullscreen' | 'regular') {
     children: [],
     openUrl: (url: string) => browsed.push(url),
     getMountedRoots: () => [root],
-    requestRender: () => {},
+    // The TUI's render pass, reduced to the layout it ends in: content height meets viewport height.
+    requestRender: () => transcript.updateLayout(document.render(width).length, viewport, () => {}),
   }
 
   const reply = { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] } }
@@ -54,7 +57,7 @@ function load(mode: 'fullscreen' | 'regular') {
   }
   handlers.get('session_start')?.({}, ctx)
 
-  const screen = () => markdown.render(200)
+  const screen = () => markdown.render(width)
   const note = () => handlers.get('before_agent_start')?.({ messageType: 'user', systemPromptOptions: { sections: {} } }, ctx)?.message?.content
   return { tui, transcript, browsed, screen, note, shutdown: () => handlers.get('session_shutdown')?.({}, ctx) }
 }
@@ -84,8 +87,8 @@ test('a click on a stretch grows it in place and « shrinks it back', async () =
     assert.ok(opener, 'the short form is a link')
     assert.equal(pi.transcript.isFollowingEnd, true)
     pi.tui.openUrl(opener)
-    // The transcript stops following its end, so the words already read do not move up.
-    assert.equal(pi.transcript.isFollowingEnd, false)
+    // The transcript keeps following its end: its own layout scrolls it down with the growth.
+    assert.equal(pi.transcript.isFollowingEnd, true)
     await settle()
     assert.equal(text(pi.screen()), 'The build fails on a stale dependency cache keyed only by package.json «. Rerun it.')
     assert.deepEqual(pi.browsed, [], 'our link never reaches the browser')
@@ -95,6 +98,56 @@ test('a click on a stretch grows it in place and « shrinks it back', async () =
     pi.tui.openUrl(closer)
     await settle()
     assert.equal(text(pi.screen()), 'The build fails on a stale cache. Rerun it.')
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('a scrolled-up view scrolls down with the growth and up with the shrink', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  // A narrow width, so the long form takes more lines than the short one, and enough content
+  // above the reply that the growth cannot push the view to the transcript's end.
+  const pi = load('fullscreen', { width: 24, viewport: 5, above: 20 })
+  try {
+    const closed = pi.screen().length
+    pi.tui.requestRender()
+    pi.transcript.scrollToStart()
+    assert.equal(pi.transcript.isFollowingEnd, false)
+
+    pi.tui.openUrl(linkOver(pi.screen(), 'stale cache'))
+    await settle()
+    const grown = pi.screen().length - closed
+    assert.ok(grown > 0, 'the growth adds lines')
+    assert.equal(pi.transcript.scrollTop, grown)
+
+    pi.tui.openUrl(linkOver(pi.screen(), '«'))
+    await settle()
+    assert.equal(pi.transcript.scrollTop, 0)
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('a manual scroll stops the auto-scrolling', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen', { width: 24, viewport: 5, above: 20 })
+  try {
+    pi.screen()
+    pi.tui.requestRender()
+    pi.transcript.scrollToStart()
+
+    pi.tui.openUrl(linkOver(pi.screen(), 'stale cache'))
+    // Let the growth run a while, then take the wheel: the view keeps the growth on screen
+    // but stops moving, where the reader left it.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    pi.transcript.scrollBy(1)
+    const leftAt = pi.transcript.scrollTop
+    await settle()
+    assert.equal(
+      text(pi.screen()).replaceAll('\n', ' '),
+      'The build fails on a stale dependency cache keyed only by package.json «. Rerun it.',
+    )
+    assert.equal(pi.transcript.scrollTop, leftAt)
   } finally {
     pi.shutdown()
   }

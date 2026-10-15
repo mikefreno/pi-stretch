@@ -6,9 +6,10 @@ pi extension. Replies arrive short; click a linked phrase and it grows right whe
 - **Guide**: `before_agent_start` adds cc-stretch's stretchtext guide to the system prompt as a
   `stretchtext` section, so the model writes replies as `{{short|long}}` stretchtext.
 - **Inline**: a markdown transformer draws each closed stretch as a link on its short form and
-  each open one with a `«` after it. A click grows the long form in place in the transcript (the
-  words already read never move), `«` shrinks it back. Stretches nest, and any reply in the
-  transcript can be read this way, not only the last.
+  each open one with a `«` after it. A click grows the long form in place in the transcript,
+  the view scrolling down with the growth and back up as `«` shrinks it — until the reader
+  scrolls, which hands the view back to them. Stretches nest, and any reply in the transcript
+  can be read this way, not only the last.
 - **Streaming**: while a reply streams, its stretches show as their short forms.
 - **Feedback**: with the reader's next message, the model is told which stretches they opened
   since its last reply, as a hidden note, so it never assumes they read a long form they did not

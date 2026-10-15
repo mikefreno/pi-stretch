@@ -1,7 +1,8 @@
 // cc-stretch for pi: replies that arrive short and grow where they stand. The
 // model writes stretchtext ({{short|long}}) under the guide below, and pi's
 // transcript draws every stretch closed, as a link on its short form. A click
-// on one grows its long form in place, and `«` shrinks it back. What the
+// on one grows its long form in place, the transcript scrolling with the
+// growth, and `«` shrinks it back. What the
 // reader opened is told to the model with their next message, so it never
 // assumes they read the rest. Ported from the Claude Code plugin:
 // github.com/pro-vi/cc-stretch (parse.ts, grow.ts and guide.ts here are its,
@@ -38,6 +39,14 @@ export default function stretch(pi: ExtensionAPI) {
   const open = new Map<string, string[]>()
   let growth: Growth | undefined
   let timer: ReturnType<typeof setInterval> | undefined
+  // Auto-scroll state of a growth: the lines each scroll view could not take yet (it had
+  // reached its end before the layout caught up), retried on the next frame and once it ends,
+  // and the scrollTop our own scrolling last left each view at. A scrollTop that moved on its
+  // own means the reader scrolled: that view is released and left alone for the rest of the growth.
+  const pending = new Map<ScrollView, number>()
+  const at = new Map<ScrollView, number>()
+  const released = new Set<ScrollView>()
+  let flushTimer: ReturnType<typeof setTimeout> | undefined
   // The short forms the reader opened since their last message.
   let seen: string[] = []
 
@@ -45,6 +54,7 @@ export default function stretch(pi: ExtensionAPI) {
   const hook = (): boolean => {
     if (tui === undefined || tui.mode !== 'fullscreen' || !getCapabilities().hyperlinks) return false
     // pi can swap the renderer for a new one; its `openUrl` is wrapped again the first time it draws.
+    // SAFETY: pi's TUI has an `openUrl` its type does not declare; Host names only the fields read here.
     const host = tui as unknown as Host
     if (host.openUrl !== press) {
       follow = host.openUrl
@@ -78,11 +88,11 @@ export default function stretch(pi: ExtensionAPI) {
       if (!seen.includes(short)) seen.push(short)
     }
 
-    // The words already read stay where they are: a transcript following its end would push
-    // them up as the stretch grows beneath.
-    for (const { scroll } of drawnOf(block)) scroll?.scrollTo(scroll.scrollTop, { disableFollow: true })
-    if (was !== undefined && was.block !== block) redraw(was.block)
-    redraw(block)
+    pending.clear()
+    at.clear()
+    released.clear()
+    if (was !== undefined && was.block !== block) redraw(was.block, true)
+    redraw(block, true)
     timer ??= setInterval(tick, FRAME_MS)
   }
 
@@ -91,14 +101,27 @@ export default function stretch(pi: ExtensionAPI) {
     const progress = growth.progress + ((growth.isOpening ? 1 : -1) * FRAME_MS) / growth.duration
     if (progress > 0 && progress < 1) {
       growth = { ...growth, progress }
-      return redraw(growth.block)
+      return redraw(growth.block, true)
     }
     // A shrunk stretch, and every stretch inside it, leaves the open list as its growth ends.
     const done = growth
     if (!done.isOpening) open.set(done.block, closed(open.get(done.block) ?? [], done.key))
     growth = undefined
     stop()
-    redraw(done.block)
+    redraw(done.block, true)
+    flushTimer ??= setTimeout(flush, FRAME_MS * 2)
+  }
+
+  /** Take the lines a finished growth still owed its scroll views, once the last layout landed. */
+  const flush = (): void => {
+    flushTimer = undefined
+    for (const [scroll, owed] of pending) {
+      const taken = scroll.isFollowingEnd || released.has(scroll) || (at.has(scroll) && scroll.scrollTop !== at.get(scroll))
+      if (owed === 0 || taken) pending.delete(scroll)
+      else pending.set(scroll, scroll.scrollBy(owed))
+    }
+    at.clear()
+    released.clear()
   }
 
   const stop = (): void => {
@@ -114,21 +137,48 @@ export default function stretch(pi: ExtensionAPI) {
     const found: { markdown: Markdown; scroll: ScrollView | undefined }[] = []
     const visit = (node: Node, scroll: ScrollView | undefined) => {
       if (node instanceof Markdown) {
-        if (test((node as unknown as { text: string }).text)) found.push({ markdown: node, scroll })
+        // SAFETY: Markdown's `text` is the source string it was constructed with; its type hides it.
+        const text = (node as unknown as { text: string }).text
+        if (test(text)) found.push({ markdown: node, scroll })
         return
       }
       const within = node instanceof ScrollView ? node : scroll
       for (const child of node.children ?? []) visit(child, within)
     }
+    // SAFETY: pi's TUI has `getMountedRoots` its type does not declare; Host names only the fields read here.
     const host = tui as unknown as Host
     for (const root of host.getMountedRoots?.() ?? tui.children) visit(root, undefined)
     return found
   }
 
   // pi's Markdown keeps its lines until its text changes; a stretch growing changes only what
-  // the transformer makes of the text, so its blocks are told to draw again.
-  const redraw = (block: string): void => {
-    for (const { markdown } of drawnOf(block)) markdown.invalidate()
+  // the transformer makes of the text, so its blocks are told to draw again. With `scrollWith`
+  // the view scrolls with the lines the growth gains or loses: down as the long form opens, up
+  // as it shrinks, so the words being read keep their place on the screen — until the reader
+  // scrolls, which hands the view back to them. A view following its end is left to its own
+  // layout, which scrolls the same way on its own.
+  const redraw = (block: string, scrollWith = false): void => {
+    for (const { markdown, scroll } of drawnOf(block)) {
+      // SAFETY: Markdown caches its last render's width and lines under these names; its type hides them.
+      const cache = markdown as unknown as { cachedWidth?: number; cachedLines?: string[] }
+      const width = cache.cachedWidth
+      const before =
+        scrollWith && scroll !== undefined && !scroll.isFollowingEnd && !released.has(scroll) && width !== undefined
+          ? cache.cachedLines?.length
+          : undefined
+      markdown.invalidate()
+      if (before === undefined || scroll === undefined || width === undefined) continue
+      if (at.has(scroll) && scroll.scrollTop !== at.get(scroll)) {
+        released.add(scroll)
+        pending.delete(scroll)
+        at.delete(scroll)
+        continue
+      }
+      const owed = markdown.render(width).length - before + (pending.get(scroll) ?? 0)
+      if (owed === 0) pending.delete(scroll)
+      else pending.set(scroll, scroll.scrollBy(owed))
+      at.set(scroll, scroll.scrollTop)
+    }
     tui?.requestRender()
   }
 
@@ -151,6 +201,11 @@ export default function stretch(pi: ExtensionAPI) {
 
   pi.on('session_shutdown', () => {
     stop()
+    if (flushTimer !== undefined) clearTimeout(flushTimer)
+    pending.clear()
+    at.clear()
+    released.clear()
+    // SAFETY: pi's TUI has an `openUrl` its type does not declare; Host names only the fields read here.
     const host = tui as unknown as Host | undefined
     if (host !== undefined && host.openUrl === press) host.openUrl = follow
     tui = undefined
