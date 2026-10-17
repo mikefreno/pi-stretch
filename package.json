@@ -24,6 +24,7 @@
     "grow.ts",
     "guide.ts",
     "inline.ts",
+    "layout.ts",
     "parse.ts",
     "README.md",
     "LICENSE"

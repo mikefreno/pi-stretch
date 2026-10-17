@@ -23,7 +23,7 @@ import { lengthOf } from './grow'
 import { GUIDE } from './guide'
 import { blockOf, closed, drawOpen, drawPressable, targetOf } from './inline'
 import type { Growth } from './inline'
-import { hideLongForms, isOpenable, parse, stretches } from './parse'
+import { hideLongForms, isOpenable, newStreamState, parse, stretches } from './parse'
 
 const FRAME_MS = 16
 
@@ -258,7 +258,7 @@ export default function stretch(pi: ExtensionAPI) {
   // or, where a press cannot land, they are all drawn open.
   pi.registerMarkdownTransformer((markdown, context) => {
     if (context.messageType !== 'assistant') return markdown
-    if (context.isStreaming) return hideLongForms(markdown, { open: [], fence: undefined })
+    if (context.isStreaming) return hideLongForms(markdown, newStreamState())
     if (!markdown.includes('{{')) return markdown
     if (!hook()) return drawOpen(markdown)
 

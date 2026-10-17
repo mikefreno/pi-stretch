@@ -21,7 +21,7 @@ const THEME: MarkdownTheme = {
 type Handler = (event: any, ctx: any) => any
 
 /** The extension loaded into a stand-in for pi: one reply in a transcript, on a TUI in `mode`. */
-function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?: number; above?: number } = {}) {
+function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?: number; above?: number } = {}, replyMarkdown: string = REPLY) {
   const { width = 200, viewport = 1000, above = 0 } = view
   const handlers = new Map<string, Handler>()
   let transform: (markdown: string, context: any) => string = markdown => markdown
@@ -31,7 +31,7 @@ function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?:
   } as any)
 
   const browsed: string[] = []
-  const markdown = new Markdown(REPLY, 0, 0, THEME, undefined, {
+  const markdown = new Markdown(replyMarkdown, 0, 0, THEME, undefined, {
     transform: (text: string, availableWidth: number) => transform(text, { messageType: 'assistant', isStreaming: false, availableWidth }),
   })
   const document = new Container()
@@ -49,7 +49,7 @@ function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?:
     requestRender: () => transcript.updateLayout(document.render(width).length, viewport, () => {}),
   }
 
-  const reply = { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: REPLY }] } }
+  const reply = { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: replyMarkdown }] } }
   const ctx: any = {
     mode: 'tui',
     sessionManager: { getBranch: () => [{ type: 'message', message: { role: 'user', content: 'why?' } }, reply] },

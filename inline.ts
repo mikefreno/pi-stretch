@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto'
 
 import { grow } from './grow'
-import { KEY_SEPARATOR, parse } from './parse'
+import { closeAfter, isLinkable, KEY_SEPARATOR, parse } from './parse'
 import type { Segment, Stretch } from './parse'
 
 const ORIGIN = 'https://pi-stretch.invalid/'
@@ -43,9 +43,11 @@ export function drawPressable(markdown: string, block: string, open: string[], g
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
     if (stretch.long === undefined || !stretch.isClosed) return stretch.short
+    // A short form over several lines is drawn open: a terminal link cannot span rows.
+    if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : write(stretch.long)
     if (growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(growth.progress), draw)
     if (!open.includes(stretch.key)) return linked(stretch.short, hrefOf(block, stretch.key))
-    return `${write(stretch.long)} [«](${hrefOf(block, stretch.key)})`
+    return closeAfter(write(stretch.long), `[«](${hrefOf(block, stretch.key)})`, '\n\n')
   }
 
   return write(parse(markdown))
