@@ -34,6 +34,9 @@ more, local or over SSH) in your Mac's notch, on your iPhone and on your Apple W
 reads stretchtext from both pi-stretch and cc-stretch exactly as the terminal does. Stretches
 open and close on a tap in the Mac's session detail and the iPhone's message view.
 
-`parse.ts`, `grow.ts` and `guide.ts` are cc-stretch's, vendored unchanged; `inline.ts` writes
-stretches into pi's markdown. `npm test` drives the extension against pi-tui's own Markdown;
+`guide.ts` is cc-stretch's, vendored unchanged, and `parse.ts`, `grow.ts` and `layout.ts` (the
+`breakables` slice of cc-stretch's `hooks/layout.ts`) are theirs with two additions, each marked in
+place: `woven` in `grow.ts` keeps every word of a short form on the screen when a long form is not
+an expansion of it, and a lone `}` in `parse.ts` closes a long form the way `}}` would. `inline.ts`
+writes stretches into pi's markdown. `npm test` drives the extension against pi-tui's own Markdown;
 `npm run typecheck` checks it against the installed pi.

@@ -42,7 +42,10 @@ export function targetOf(url: string): { block: string; key: string } | undefine
 export function drawPressable(markdown: string, block: string, open: string[], growth: Growth | undefined): string {
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
-    if (stretch.long === undefined || !stretch.isClosed) return stretch.short
+    if (stretch.long === undefined) return stretch.short
+    // A stretch the reply never closed: its long form is text the reply still owes the reader, and
+    // stands where it is rather than taking the tail of the reply off the screen (MISC-44).
+    if (!stretch.isClosed) return stretch.long.length === 0 ? stretch.short : `${stretch.short.trimEnd()} ${write(stretch.long)}`
     // The long form with its short form's words woven back in: an open stretch never takes a word
     // the reader could see off the screen, even when the long form is not an expansion of it.
     const long = woven(stretch.short, stretch.long)
@@ -59,8 +62,11 @@ export function drawPressable(markdown: string, block: string, open: string[], g
 /** A block with every stretch drawn as its long form, for screens where a press cannot land. */
 export function drawOpen(markdown: string): string {
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
-  const draw = (part: Stretch): string =>
-    part.long === undefined ? part.short : grow(part.short, woven(part.short, part.long), 1, draw)
+  const draw = (part: Stretch): string => {
+    if (part.long === undefined) return part.short
+    if (!part.isClosed) return part.long.length === 0 ? part.short : `${part.short.trimEnd()} ${write(part.long)}`
+    return grow(part.short, woven(part.short, part.long), 1, draw)
+  }
 
   return write(parse(markdown))
 }

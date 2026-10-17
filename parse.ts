@@ -139,6 +139,16 @@ export function parse(text: string): Segment[] {
       continue
     }
 
+    // A lone `}` in a long form closes it, as the second brace of `}}` would: a reply that drops one
+    // brace still ends its stretch where it meant to, instead of swallowing the rest of the reply
+    // into it. pi-stretch's addition on top of cc-stretch's parse.ts (MISC-44).
+    if (frame !== undefined && frame.stretch.long !== undefined && text[i] === '}') {
+      frame.stretch.isClosed = true
+      stack.pop()
+      i += 1
+      continue
+    }
+
     write(text[i] ?? '')
     i += 1
   }
@@ -235,6 +245,9 @@ export function hideLongForms(lines: string, state: StreamState): string {
         } else if (top !== undefined && line.startsWith('}}', i)) {
           state.open.pop()
           i++
+        } else if (top?.isLong === true && line[i] === '}') {
+          // A lone `}` closes a long form too, as parse() reads it (MISC-44).
+          state.open.pop()
         } else if (isShown) {
           out += line[i]
         }

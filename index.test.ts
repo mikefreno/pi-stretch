@@ -328,3 +328,41 @@ test('a nested stretch survives the growth and still opens (MISC-43)', async () 
     pi.shutdown()
   }
 })
+
+test('a stretch closed with one brace keeps the reply\'s tail (MISC-44)', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  // Real model output (Nook session 01a1409e): a long form closed with one brace swallowed the
+  // rest of the reply — the plan, the stretch after it and the sign-off all vanished.
+  const typo = 'Head {{short one|long one text}\n\nPara two with {{short two|long two}} and tail words.'
+  const pi = load('fullscreen', {}, typo)
+  try {
+    const shown = text(pi.screen())
+    assert.ok(shown.includes('Para two with') && shown.includes('tail words'), 'the tail after it is on the screen')
+    // The repaired stretch itself still opens and shrinks.
+    pi.tui.openUrl(linkOver(pi.screen(), 'short one') ?? '')
+    await settle()
+    assert.deepEqual(lostWords(text(pi.screen()), 'long one text'), [], 'and its long form opens')
+    pi.tui.openUrl(linkOver(pi.screen(), '«') ?? '')
+    await settle()
+    // And the stretch after the typo is still there and still opens.
+    const later = linkOver(pi.screen(), 'short two')
+    assert.ok(later, 'the later stretch is a link')
+    pi.tui.openUrl(later)
+    await settle()
+    assert.deepEqual(lostWords(text(pi.screen()), 'long two'), [])
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('a stretch the reply never closes shows all of its text (MISC-44)', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen', {}, 'Head {{short one|long one text and more')
+  try {
+    const shown = text(pi.screen())
+    assert.ok(shown.includes('short one'), 'the short form is on the screen')
+    assert.ok(shown.includes('long one text and more'), 'and the text it would have swallowed')
+  } finally {
+    pi.shutdown()
+  }
+})
