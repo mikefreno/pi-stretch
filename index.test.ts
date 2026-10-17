@@ -49,7 +49,7 @@ function load(mode: 'fullscreen' | 'regular', view: { width?: number; viewport?:
     requestRender: () => transcript.updateLayout(document.render(width).length, viewport, () => {}),
   }
 
-  const reply = { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: replyMarkdown }] } }
+  const reply = { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: replyMarkdown } ] } }
   const ctx: any = {
     mode: 'tui',
     sessionManager: { getBranch: () => [{ type: 'message', message: { role: 'user', content: 'why?' } }, reply] },
@@ -237,5 +237,94 @@ test('where a click cannot land, every stretch is drawn open', () => {
     } finally {
       pi.shutdown()
     }
+  }
+})
+
+// The pair that reported MISC-43 (session 01a146ca): a long form that continues the reply rather
+// than expanding its short form, with none of the short form's words in it — and the status stretch
+// at the reply's end, whose long form is a non-sequitur.
+const CONTINUATION_SHORT =
+  'Done looks like: an About panel listing every crate from `third_party_crates()` with its version and the SPDX expression verbatim, sorted and scrollable, with the full licence text reachable per entry — the text the dependency ships, not a paraphrase, and MPL-2.0 rows included.'
+const CONTINUATION_LONG =
+  'It reads the generated list only, a test asserts every entry renders, and the panel is keyboard accessible. No hand-maintained copy anywhere.'
+const STATUS_SHORT = 'Status: AUDI-83 claimed and held at the go-ahead gate; no product code touched.'
+const STATUS_LONG = 'Ready to start on your word.'
+const CONTINUATION = `{{${CONTINUATION_SHORT}|${CONTINUATION_LONG}}}\n\n{{${STATUS_SHORT}|${STATUS_LONG}}}`
+
+/** The words a reader reads in `text`: markdown marks stripped, punctuation-only tokens dropped. */
+const wordsOf = (source: string) =>
+  source
+    .replace(/[`*]/g, '')
+    .split(/\s+/)
+    .filter(word => /[\p{L}\p{N}]/u.test(word))
+
+/** The words of `short` that do not appear on the screen — empty when the screen keeps all of them. */
+const lostWords = (screen: string, short: string) => wordsOf(short).filter(word => !screen.includes(word))
+
+test('opening a stretch keeps every word of its short form (MISC-43)', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen', { width: 320 }, CONTINUATION)
+  try {
+    assert.deepEqual(lostWords(text(pi.screen()), CONTINUATION_SHORT), [])
+    pi.tui.openUrl(linkOver(pi.screen(), 'Done looks like') ?? '')
+    // The growth's first frame already carries the whole short form, not anchor fragments.
+    assert.deepEqual(lostWords(text(pi.screen()), CONTINUATION_SHORT), [])
+    await settle()
+    const grown = text(pi.screen())
+    assert.deepEqual(lostWords(grown, CONTINUATION_SHORT), [], 'the open form keeps every short word')
+    assert.deepEqual(lostWords(grown, CONTINUATION_LONG), [], 'and every long word')
+    // A long form that shares little with its short form grows after it, so both read whole.
+    assert.ok(grown.includes(CONTINUATION_SHORT.replace(/[`*]/g, '')), 'the short form stands whole before the long form')
+
+    // The stretch at the reply's end, whose long form shares no words with its short form.
+    pi.tui.openUrl(linkOver(pi.screen(), 'Status: AUDI-83') ?? '')
+    await settle()
+    const shown = text(pi.screen())
+    assert.deepEqual(lostWords(shown, STATUS_SHORT), [])
+    assert.deepEqual(lostWords(shown, STATUS_LONG), [])
+  } finally {
+    pi.shutdown()
+  }
+})
+
+test('opening and closing a stretch returns the screen it began on (MISC-43)', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen', {}, CONTINUATION)
+  try {
+    const before = text(pi.screen())
+    pi.tui.openUrl(linkOver(pi.screen(), 'Done looks like') ?? '')
+    await settle()
+    pi.tui.openUrl(linkOver(pi.screen(), '«') ?? '')
+    await settle()
+    assert.equal(text(pi.screen()), before)
+  } finally {
+    pi.shutdown()
+  }
+})
+
+const NESTED = 'Outer {{alpha short|alpha long words {{beta short|beta long tail}} omega}} end.'
+
+test('a nested stretch survives the growth and still opens (MISC-43)', async () => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: true })
+  const pi = load('fullscreen', {}, NESTED)
+  try {
+    const before = text(pi.screen())
+    pi.tui.openUrl(linkOver(pi.screen(), 'alpha short') ?? '')
+    await settle()
+    const shown = text(pi.screen())
+    assert.deepEqual(lostWords(shown, 'alpha short'), [])
+    assert.ok(shown.includes('beta short') && shown.includes('omega'), 'the nested short form is there')
+    const nested = linkOver(pi.screen(), 'beta short')
+    assert.ok(nested, 'the nested short form is a link')
+    pi.tui.openUrl(nested)
+    await settle()
+    assert.deepEqual(lostWords(text(pi.screen()), 'beta long tail'), [], 'the nested stretch opens without losing words')
+    pi.tui.openUrl(linkOver(pi.screen(), '«') ?? '')
+    await settle()
+    pi.tui.openUrl(linkOver(pi.screen(), '«') ?? '')
+    await settle()
+    assert.equal(text(pi.screen()), before)
+  } finally {
+    pi.shutdown()
   }
 })

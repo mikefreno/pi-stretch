@@ -182,3 +182,96 @@ function anchorsOf(short: string, tokens: Token[]): { anchors: Set<number>; miss
 function bare(word: string): string {
   return word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toLowerCase()
 }
+
+/**
+ * The long form with the short form's words it does not keep woven back in, so opening a stretch
+ * grows around what the reader already read instead of taking any of it off the screen. A long form
+ * that keeps every word of its short form stands as written; one that keeps most of them is an edit
+ * of the short form and grows around it; one that keeps few is new text and grows after it. This is
+ * pi-stretch's addition on top of cc-stretch's grow.ts (MISC-43): hooks/guide.ts asks a long form to
+ * keep every word of the short form, and this keeps the reader whole when a reply does not.
+ */
+export function woven(short: string, long: Segment[]): Segment[] {
+  const have = tokenize(long)
+  const want = tokenize([short])
+    .filter((token): token is { kind: 'word'; text: string } => token.kind === 'word')
+    .map(token => ({ word: bare(token.text) || token.text, text: token.text }))
+  const words: { token: number; word: string }[] = []
+  have.forEach((token, i) => {
+    if (token.kind === 'word') words.push({ token: i, word: bare(token.text) || token.text })
+    else if (token.kind === 'nested') {
+      const shorts = token.stretch.short.split(/\s+/).map(piece => bare(piece) || piece).filter(piece => piece !== '')
+      for (const word of shorts) words.push({ token: i, word })
+    }
+  })
+
+  // The long form keeps every word of the short form in order: it stands as written.
+  let matched = 0
+  for (const { word } of words) {
+    if (matched === want.length) break
+    if (word === want[matched]?.word) matched++
+  }
+  if (matched === want.length) return long
+
+  // Otherwise, the words of the short form the long form does not carry. A cell per pair of words,
+  // as in anchorsOf above, and a walk back through it places each of them among the long form's.
+  const lengths = Array.from({ length: want.length + 1 }, () => new Array<number>(words.length + 1).fill(0))
+  for (let i = want.length - 1; i >= 0; i--) {
+    for (let j = words.length - 1; j >= 0; j--) {
+      const row = lengths[i] ?? [], below = lengths[i + 1] ?? []
+      row[j] = want[i]?.word === words[j]?.word ? (below[j + 1] ?? 0) + 1 : Math.max(below[j] ?? 0, row[j + 1] ?? 0)
+    }
+  }
+  const inserts = new Map<number, { text: string }[]>()
+  const add = (at: number, word: { text: string }) => inserts.set(at, [...(inserts.get(at) ?? []), word])
+  let kept = 0
+  for (let i = 0, j = 0; i < want.length; ) {
+    const missing = want[i]
+    if (missing === undefined) break
+    if (j < words.length && missing.word === words[j]?.word) {
+      kept++
+      i++
+      j++
+    } else if (j >= words.length || (lengths[i + 1]?.[j] ?? 0) >= (lengths[i]?.[j + 1] ?? 0)) {
+      add(j < words.length ? words[j]?.token ?? have.length : have.length, missing)
+      i++
+    } else j++
+  }
+
+  // The long form keeps few of the short form's words: it is new text, not an edit of what the
+  // reader read, and weaves into it badly. It grows after the short form instead.
+  if (kept * 2 < want.length) return [short.trimEnd(), ' ', ...long]
+
+  const out: Atom[] = []
+  const tail = (): string => {
+    const last = out.at(-1)
+    return typeof last === 'string' ? last : (last as Stretch | undefined)?.short ?? ''
+  }
+  const push = (atom: Atom) => {
+    const before = out.at(-1)
+    const text = typeof atom === 'string' ? atom : atom.short
+    const spaced = typeof before === 'string' && /\s$/.test(before)
+    if (before !== undefined && !spaced && spacedApart(tail(), text)) out.push(' ')
+    out.push(atom)
+  }
+  have.forEach((token, i) => {
+    for (const word of inserts.get(i) ?? []) push(word.text)
+    if (token.kind === 'space') out.push(token.text)
+    else push(token.kind === 'nested' ? token.stretch : token.text)
+  })
+  for (const word of inserts.get(have.length) ?? []) push(word.text)
+
+  return out.reduce<Segment[]>((parts, atom) => {
+    const last = parts.at(-1)
+    if (typeof atom === 'string' && typeof last === 'string') parts[parts.length - 1] = last + atom
+    else parts.push(atom)
+    return parts
+  }, [])
+}
+
+/** Whether two texts standing together are spelled apart by a space: Latin words are, CJK is not. */
+function spacedApart(a: string, b: string): boolean {
+  const left = a.trimEnd(), right = b.trimStart()
+  if (left === '' || right === '') return false
+  return breakables(left + right).length === 1
+}

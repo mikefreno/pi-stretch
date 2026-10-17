@@ -6,7 +6,7 @@
 
 import { createHash } from 'node:crypto'
 
-import { grow } from './grow'
+import { grow, woven } from './grow'
 import { closeAfter, isLinkable, KEY_SEPARATOR, parse } from './parse'
 import type { Segment, Stretch } from './parse'
 
@@ -43,11 +43,14 @@ export function drawPressable(markdown: string, block: string, open: string[], g
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
     if (stretch.long === undefined || !stretch.isClosed) return stretch.short
+    // The long form with its short form's words woven back in: an open stretch never takes a word
+    // the reader could see off the screen, even when the long form is not an expansion of it.
+    const long = woven(stretch.short, stretch.long)
     // A short form over several lines is drawn open: a terminal link cannot span rows.
-    if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : write(stretch.long)
-    if (growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(growth.progress), draw)
+    if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : grow(stretch.short, long, 1, draw)
+    if (growth?.key === stretch.key) return grow(stretch.short, long, easeInOut(growth.progress), draw)
     if (!open.includes(stretch.key)) return linked(stretch.short, hrefOf(block, stretch.key))
-    return closeAfter(write(stretch.long), `[«](${hrefOf(block, stretch.key)})`, '\n\n')
+    return closeAfter(grow(stretch.short, long, 1, draw), `[«](${hrefOf(block, stretch.key)})`, '\n\n')
   }
 
   return write(parse(markdown))
@@ -55,8 +58,9 @@ export function drawPressable(markdown: string, block: string, open: string[], g
 
 /** A block with every stretch drawn as its long form, for screens where a press cannot land. */
 export function drawOpen(markdown: string): string {
-  const write = (parts: Segment[]): string =>
-    parts.map(part => (typeof part === 'string' ? part : part.long === undefined ? part.short : write(part.long))).join('')
+  const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
+  const draw = (part: Stretch): string =>
+    part.long === undefined ? part.short : grow(part.short, woven(part.short, part.long), 1, draw)
 
   return write(parse(markdown))
 }
